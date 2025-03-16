@@ -31,9 +31,6 @@ jobs:
       - name: Install step
         run: "pip -r requirements.txt"
 
-      - name: Build step
-        run: "python ddos-bot.py"
-
       - name: Upload to Deno Deploy
         uses: denoland/deployctl@v1
         with:
