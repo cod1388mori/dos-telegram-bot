@@ -16,11 +16,11 @@ from datetime import datetime, timedelta
 init()
 
 # توکن ربات
-TOKEN = "7897211314:AAEdblHnNZLjIxbMPwWepzr9p2nsliRZI6w"  # توکن ربات
+TOKEN = "8469404280:AAExf4TRk_hPU_WmUwN1qUdD94mJv_LtYug"  # توکن ربات
 bot = telebot.TeleBot(TOKEN)
 
 # آیدی ادمین (خودت)
-ADMIN_ID = "8068225587"  # آیدی عددی ادمین
+ADMIN_ID = "6970586648"  # آیدی عددی ادمین
 
 # لینک گروه برای هدایت کاربران
 GROUP_LINK = "https://t.me/+Dzray-5fpA9jMDU0"
