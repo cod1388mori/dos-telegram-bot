@@ -169,3 +169,12 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+.env.local
+
+# Node / Vite / Convex
+node_modules/
+tsconfig.tsbuildinfo
+src/convex/_generated/
+.convex/
+.vly-run/
